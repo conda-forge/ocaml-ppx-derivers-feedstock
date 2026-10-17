@@ -1,6 +1,6 @@
 context:
   version: "1.2.1"
-  build_number: 2
+  build_number: 3
 
   # ocaml_win-64 ships gcc_* and vs2022_* at the same version/build; name the track.
   c_toolchain: ${{ "" if unix else c_compiler ~ "_*" }}
@@ -38,25 +38,30 @@ requirements:
         - ${{ stdlib("m2w64_c") }}
       else:
         - ${{ stdlib("c") }}
-    # MSVC is activated here, once. ocaml_win-64 >=14 only run-constrains
-    # vs2022_win-64, so host no longer activates it a second time.
+    # MSVC is activated here, once: ocaml_win-64 >=14 only run-constrains it.
     - if: not unix and c_compiler == "vs2022"
       then:
         - ${{ compiler('c') }}
-    - ocaml_${{ target_platform }} ${{ ocaml_compiler_version }}.* ${{ c_toolchain }}
+    - ${{ compiler("ocaml") }}
+    # compiler("ocaml") renders no toolchain track; name it on windows.
+    - if: not unix
+      then:
+        - ocaml_${{ target_platform }} ${{ ocaml_compiler_version }}.* ${{ c_toolchain }}
     - if: build_platform != target_platform
       then:
-        - ocaml ${{ ocaml_compiler_version }}.*
+        - ocaml_${{ build_platform }} ${{ ocaml_compiler_version }}.*
     - ocaml-dune >=1.0
   host:
     - ocaml ${{ ocaml_compiler_version }}.*
-    - ocaml_${{ target_platform }} ${{ ocaml_compiler_version }}.* ${{ c_toolchain }}
-  # The ocaml run_export carries no build-string glob, so it does not encode
-  # the windows toolchain track; constrain it explicitly.
+    # The noarch ocaml metapackage does not pin the windows toolchain track.
+    - if: not unix
+      then:
+        - ocaml_${{ target_platform }} ${{ ocaml_compiler_version }}.* ${{ c_toolchain }}
+  # The ocaml run_export does not encode the windows toolchain track.
   run_constraints:
     - if: not unix
       then:
-        - ocaml_${{ target_platform }} * ${{ c_compiler }}_*
+        - ocaml_${{ target_platform }} ${{ ocaml_compiler_version }}.* ${{ c_toolchain }}
 
 tests:
   - package_contents:
