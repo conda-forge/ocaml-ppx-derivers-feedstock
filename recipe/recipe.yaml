@@ -39,7 +39,7 @@ requirements:
       else:
         - ${{ stdlib("c") }}
     # MSVC is activated here, once: ocaml_win-64 >=14 only run-constrains it.
-    - if: not unix and c_compiler == "vs2022"
+    - if: not unix and c_compiler != "gcc"
       then:
         - ${{ compiler('c') }}
     - ${{ compiler("ocaml") }}
