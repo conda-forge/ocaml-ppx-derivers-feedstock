@@ -1,5 +1,10 @@
 context:
   version: "1.2.1"
+  build_number: 2
+
+  # ocaml_win-64 ships gcc_* and vs2022_* at the same version/build; name the track.
+  c_toolchain: ${{ "" if unix else c_compiler ~ "_*" }}
+  library: ${{ "Library/" if not unix else "" }}
 
 package:
   name: ocaml-ppx-derivers
@@ -10,27 +15,55 @@ source:
   sha256: b6595ee187dea792b31fc54a0e1524ab1e48bc6068d3066c45215a138cc73b95
 
 build:
-  number: 0
-  skip:
-    - win
+  number: ${{ build_number }}
+  string: ${{ c_compiler ~ "_" if not unix }}h${{ hash }}_${{ build_number }}
   script:
-    - dune build --profile=release -p ppx_derivers @install
-    - dune install --prefix="${PREFIX}" --libdir="${PREFIX}/lib/ocaml" ppx_derivers
+    - if: unix
+      then:
+        - dune build --profile=release -p ppx_derivers @install
+        - dune install --prefix="${PREFIX}" --libdir="${PREFIX}/lib/ocaml" ppx_derivers
+      else:
+        # Plain cmd.exe, not MSYS2 bash: pure OCaml, no stubs, so no wrapper is
+        # needed and the backslashed install prefix reaches dune intact. The
+        # dune cache trips over mixed path separators on windows.
+        - dune build --cache=disabled --profile=release -p ppx_derivers @install
+        - if errorlevel 1 exit 1
+        - dune install --prefix="%LIBRARY_PREFIX%" --libdir="%LIBRARY_PREFIX%\lib\ocaml" ppx_derivers
+        - if errorlevel 1 exit 1
 
 requirements:
   build:
-    - ${{ stdlib("c") }}
-    - ${{ compiler("ocaml") }}
+    - if: not unix and c_compiler == "gcc"
+      then:
+        - ${{ stdlib("m2w64_c") }}
+      else:
+        - ${{ stdlib("c") }}
+    # MSVC is activated here, once. ocaml_win-64 >=14 only run-constrains
+    # vs2022_win-64, so host no longer activates it a second time.
+    - if: not unix and c_compiler == "vs2022"
+      then:
+        - ${{ compiler('c') }}
+    - ocaml_${{ target_platform }} ${{ ocaml_compiler_version }}.* ${{ c_toolchain }}
+    - if: build_platform != target_platform
+      then:
+        - ocaml ${{ ocaml_compiler_version }}.*
     - ocaml-dune >=1.0
   host:
-    - ocaml >=4.02.3
+    - ocaml ${{ ocaml_compiler_version }}.*
+    - ocaml_${{ target_platform }} ${{ ocaml_compiler_version }}.* ${{ c_toolchain }}
+  # The ocaml run_export carries no build-string glob, so it does not encode
+  # the windows toolchain track; constrain it explicitly.
+  run_constraints:
+    - if: not unix
+      then:
+        - ocaml_${{ target_platform }} * ${{ c_compiler }}_*
 
 tests:
   - package_contents:
       strict: true
       files:
-        - lib/ocaml/ppx_derivers/*
-        - doc/ppx_derivers/*
+        - ${{ library }}lib/ocaml/ppx_derivers/*
+        - ${{ library }}doc/ppx_derivers/*
 
 about:
   homepage: https://github.com/ocaml-ppx/ppx_derivers
