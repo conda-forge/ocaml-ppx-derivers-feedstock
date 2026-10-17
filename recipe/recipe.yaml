@@ -1,6 +1,9 @@
 context:
   version: "1.2.1"
-  build_number: 3
+  build_number: 4
+
+  # ELF machine token `file` prints for the target; checked by the arch test
+  elf_arch: ${{ "x86-64" if target_platform == "linux-64" else "aarch64" if target_platform == "linux-aarch64" else "PowerPC" if target_platform == "linux-ppc64le" else "RISC-V" if target_platform == "linux-riscv64" else "S/390" if target_platform == "linux-s390x" else "" }}
 
   # ocaml_win-64 ships gcc_* and vs2022_* at the same version/build; name the track.
   c_toolchain: ${{ "" if unix else c_compiler ~ "_*" }}
@@ -26,6 +29,8 @@ build:
         # Plain cmd.exe, not MSYS2 bash: pure OCaml, no stubs, so no wrapper is
         # needed and the backslashed install prefix reaches dune intact. The
         # dune cache trips over mixed path separators on windows.
+        # dune install also opens the shared cache; disable it for every dune call
+        - set DUNE_CACHE=disabled
         - dune build --cache=disabled --profile=release -p ppx_derivers @install
         - if errorlevel 1 exit 1
         - dune install --prefix="%LIBRARY_PREFIX%" --libdir="%LIBRARY_PREFIX%\lib\ocaml" ppx_derivers
@@ -33,31 +38,39 @@ build:
 
 requirements:
   build:
+    - ${{ compiler("ocaml") }}
     - if: not unix and c_compiler == "gcc"
       then:
         - ${{ stdlib("m2w64_c") }}
       else:
         - ${{ stdlib("c") }}
-    # MSVC is activated here, once: ocaml_win-64 >=14 only run-constrains it.
+    # ocaml_win-64 >=14 only run-constrains the C compiler; activate it here, once (vs2022, zig)
     - if: not unix and c_compiler != "gcc"
       then:
-        - ${{ compiler('c') }}
-    - ${{ compiler("ocaml") }}
-    # compiler("ocaml") renders no toolchain track; name it on windows.
+        - ${{ compiler("c") }}
+    # compiler("ocaml") renders no toolchain track; name it on windows
     - if: not unix
       then:
         - ocaml_${{ target_platform }} ${{ ocaml_compiler_version }}.* ${{ c_toolchain }}
-    - if: build_platform != target_platform
+    # the cross compiler does not pull the native one; the build runs OCaml on the build machine
+    - if: build_platform != target_platform and unix
       then:
         - ocaml_${{ build_platform }} ${{ ocaml_compiler_version }}.*
+        # ocaml >=17: the cross compiler activates itself (shims, OCAMLLIB, host OCAMLPATH) and has natdynlink
+        - ocaml_${{ target_platform }}[version="${{ ocaml_compiler_version }}.*", build_number=">=17"]
+    # windows cross: the self-contained gcc track needs no vcvars
+    - if: build_platform != target_platform and not unix
+      then:
+        - ocaml_${{ build_platform }} ${{ ocaml_compiler_version }}.* gcc_*
     - ocaml-dune >=1.0
   host:
+    # library: ocaml's run_export pins the compiler patch version
     - ocaml ${{ ocaml_compiler_version }}.*
-    # The noarch ocaml metapackage does not pin the windows toolchain track.
+    # the noarch ocaml metapackage does not pin the windows toolchain track
     - if: not unix
       then:
         - ocaml_${{ target_platform }} ${{ ocaml_compiler_version }}.* ${{ c_toolchain }}
-  # The ocaml run_export does not encode the windows toolchain track.
+  # the ocaml run_export does not encode the windows toolchain track
   run_constraints:
     - if: not unix
       then:
@@ -69,6 +82,36 @@ tests:
       files:
         - ${{ library }}lib/ocaml/ppx_derivers/*
         - ${{ library }}doc/ppx_derivers/*
+  # cross lanes test under qemu binfmt, which would also run a build-machine
+  # binary; check the native objects' ELF headers name the target instead
+  - if: linux
+    then:
+      script:
+        # test scripts are not jinja-rendered; hand the token over by env
+        env:
+          ELF_ARCH: ${{ elf_arch }}
+        content:
+          - found=0
+          - |
+            for a in $(find "${PREFIX}/lib/ocaml/ppx_derivers" -name '*.a'); do
+              found=1
+              d=$(mktemp -d)
+              (cd "$d" && ar x "$a")
+              out=$(file -L "$d"/*.o)
+              echo "$out"
+              if echo "$out" | grep -v "${ELF_ARCH}"; then echo "wrong arch in $a"; exit 1; fi
+            done
+          - |
+            for s in $(find "${PREFIX}/lib/ocaml/stublibs" -name 'dll*ppx_derivers*.so' 2>/dev/null); do
+              out=$(file -L "$s")
+              echo "$out"
+              if echo "$out" | grep -v "${ELF_ARCH}"; then echo "wrong arch in $s"; exit 1; fi
+            done
+          - test "$found" = 1
+      requirements:
+        build:
+          - file
+          - binutils
 
 about:
   homepage: https://github.com/ocaml-ppx/ppx_derivers
